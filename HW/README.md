@@ -1,0 +1,1 @@
+No dedicated HW yet. Currently this hardware is used: https://oshwlab.com/pazi88/Arduino_Mega_2560-z92kCUO6o_copy_copy_copy_copy
