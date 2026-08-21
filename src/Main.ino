@@ -1,9 +1,18 @@
 /*
+// Created by PAZI88 | Pasi Kemppainen | Sipa's bimmer garage https://github.com/pazi88
 This code controls BMW Electric Power Steering on E-Series BMWs (EPS Control). The way this works is that the Arduino is connected to CAN bus between the car and the EPS module. 
 And sends the CAN messages normally between those. But then spoofs the messages that affect the steering assist amount, so that we can control it independently.
 */
 
+// https://github.com/pazi88/STM32_CAN
 #include "STM32_CAN.h"
+
+//Bitsetting macros
+#define BIT_SET(a,b) ((a) |= (1U<<(b)))
+#define BIT_CLEAR(a,b) ((a) &= ~(1U<<(b)))
+#define BIT_CHECK(var,pos) !!((var) & (1U<<(pos)))
+#define BIT_TOGGLE(var,pos) ((var)^= 1UL << (pos))
+#define BIT_WRITE(var, pos, bitvalue) ((bitvalue) ? BIT_SET((var), (pos)) : bitClear((var), (pos)))
 
 static CAN_message_t CAN_primaryMsg;
 static CAN_message_t CAN_secondaryMsg;
@@ -16,7 +25,7 @@ int analogPin = PA0;
 int analogLevel;
 uint8_t AssistLevel;
 
-void ReadAssistLevel()  // Send can messages in 50Hz phase from timer interrupt.
+void ReadAssistLevel()
 {
   analogLevel = analogRead(analogPin);
   Serial.println(analogLevel);
@@ -45,6 +54,24 @@ void ReadAssistLevel()  // Send can messages in 50Hz phase from timer interrupt.
   {
     AssistLevel = 5;
   }
+}
+
+static uint8_t calcCanChecksum8(uint16_t base, const uint8_t *buf, uint8_t len)
+{
+  // Created by https://github.com/Juseus
+  // BN2000 8-bit checksums in the validated DSC/SZL/KOMBI messages use one
+  // end-around fold only. Do not repeatedly fold: sums such as 0x1FF must
+  // become 0x00, which matches the E61/E65/E81 logs.
+  uint16_t sum = base;
+
+  for (uint8_t i = 0U; i < len; i++)
+  {
+    sum = (uint16_t)(sum + buf[i]);
+  }
+
+  sum = (uint16_t)((sum >> 8) + (sum & 0xFFU));
+
+  return (uint8_t)(sum & 0xFFU);
 }
  
 void SetAssist()  // Adjusts the CAN speed messaga to set the adjust level
@@ -81,8 +108,16 @@ void SetAssist()  // Adjusts the CAN speed messaga to set the adjust level
       CAN_modMsg.buf[1] =  0x80;
       break;
   // checksum
-  CAN_modMsg.buf[7] = ( CAN_modMsg.buf[0] + CAN_modMsg.buf[1] + CAN_modMsg.buf[2] + CAN_modMsg.buf[3] + CAN_modMsg.buf[4] + CAN_modMsg.buf[5] + CAN_modMsg.buf[6] + 0xA4 ) & 0xFF;
+  CAN_modMsg.buf[7] = calcCanChecksum8(CAN_modMsg.id, CAN_modMsg.buf, 7U);
   }
+}
+
+void EnableAssist()  // Tell the EPS that Engine is running, so that we have constant assist
+{
+  // https://www.ms4x.net/index.php?title=Siemens_MS45_CAN_Bus_(BN2000)#ENGINE_1_0x1D0
+  CAN_modMsg = CAN_primaryMsg;
+  BIT_SET(CAN_modMsg.buf[2],5);
+  BIT_CLEAR(CAN_modMsg.buf[2],4);
 }
 
 void setup(){  
@@ -121,6 +156,11 @@ void loop() {
 	// The VSS message needs to be spoofed to adjust assist
 	if (CAN_primaryMsg.id == 0x1A0) {
 		SetAssist();
+		CanSecondary.write(CAN_modMsg);
+	}
+	// Engine status bit needs to be set running, to enable assist all the time
+	else if (CAN_primaryMsg.id == 0x1D0) {
+		EnableAssist();
 		CanSecondary.write(CAN_modMsg);
 	}
 	else {
